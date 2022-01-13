@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import os
 # from block_dataloader import generate_dataloader
-from block_dataloader_graph import generate_dataloader
+from graph_partition_multi_layers.block_dataloader_graph_1_layer import generate_dataloader
 import dgl.nn.pytorch as dglnn
 import time
 import argparse
@@ -24,6 +24,7 @@ import tracemalloc
 from cpu_mem_usage import get_memory
 from statistics import mean
 # from utils import draw_graph_global
+from dgl.data.utils import load_graphs
 
 
 def set_seed(args):
@@ -128,13 +129,17 @@ def run(args, device, data):
 	full_batch_sub_graph_data_list=[]
 	for epoch in range(args.num_epochs):
 		print('Epoch ' + str(epoch))
-		from dgl.data.utils import load_graphs
-		# full_batch_subgraph =list(load_graphs('./DATA/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
-		full_batch_subgraph =list(load_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
 		
-		cur_subgraph = full_batch_subgraph[0][0]
-		
-		full_batch_sub_graph_data_list.append(cur_subgraph)
+		cur_subgraphs=[]
+		for i in range(args.num_layers):
+			_subgraph =list(load_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_Block_'+str(i)+'_subgraph.bin',[0]))
+			cur_subgraph=_subgraph[0][0]
+			cur_subgraphs.append(_subgraph[0][0])
+			print('cur_subgraph.ndata')
+			print(len(cur_subgraph.srcdata['_ID']))
+			# print(cur_subgraph.srcdata)
+			print()
+		full_batch_sub_graph_data_list.append(cur_subgraphs)
 
 	print('========after full batch subgraphs of data loading===================================================')
 	
@@ -247,8 +252,6 @@ def run(args, device, data):
 		print('current Epoch training on CPU with block data loading Time(s): {:.4f}'.format(train_end_toc - train_start_tic ))
 		# see_memory_usage("-----------------------------------------after optimizer.step() ")
 
-					
-		
 		print('----------------------------------------------------------pseudo_mini_loss sum ' + str(loss_sum.tolist()))
 		# if epoch % args.log_every==0:
 		# 	acc = compute_acc(batch_pred, batch_labels)
@@ -360,16 +363,16 @@ if __name__=='__main__':
 	# argparser.add_argument('--dataset', type=str, default='ogbn-products')
 	# argparser.add_argument('--aggre', type=str, default='lstm')
 	# argparser.add_argument('--dataset', type=str, default='cora')
-	# argparser.add_argument('--dataset', type=str, default='karate')
-	argparser.add_argument('--dataset', type=str, default='reddit')
+	argparser.add_argument('--dataset', type=str, default='karate')
+	# argparser.add_argument('--dataset', type=str, default='reddit')
 	argparser.add_argument('--aggre', type=str, default='mean')
-	argparser.add_argument('--selection-method', type=str, default='random')
+	argparser.add_argument('--selection-method', type=str, default='range')
 	argparser.add_argument('--num-runs', type=int, default=2)
 	argparser.add_argument('--num-epochs', type=int, default=6)
 	argparser.add_argument('--num-hidden', type=int, default=16)
-	argparser.add_argument('--num-layers', type=int, default=1)
+	argparser.add_argument('--num-layers', type=int, default=2)
 	# argparser.add_argument('--fan-out', type=str, default='20')
-	argparser.add_argument('--fan-out', type=str, default='10')
+	argparser.add_argument('--fan-out', type=str, default='10,25')
 	argparser.add_argument('--num-batch', type=int, default=8)
 	argparser.add_argument('--batch-size', type=int, default=0)
 

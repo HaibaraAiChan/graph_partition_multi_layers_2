@@ -122,14 +122,16 @@ def run(args, device, data):
 	for epoch in range(args.num_epochs):
 		print('Epoch ' + str(epoch))
 		from dgl.data.utils import load_graphs
-		full_batch_subgraph =list(load_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
-		
-		cur_subgraph = full_batch_subgraph[0][0]
-		print('cur_subgraph.ndata')
-		print(len(cur_subgraph.srcdata['_ID']))
-		# print(cur_subgraph.srcdata)
-		print()
-		full_batch_sub_graph_data_list.append(cur_subgraph)
+		cur_subgraphs=[]
+		for i in range(args.num_layers):
+			_subgraph =list(load_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_Block_'+str(i)+'_subgraph.bin',[0]))
+			cur_subgraph=_subgraph[0][0]
+			cur_subgraphs.append(_subgraph[0][0])
+			print('cur_subgraph.ndata')
+			print(len(cur_subgraph.srcdata['_ID']))
+			# print(cur_subgraph.srcdata)
+			print()
+		full_batch_sub_graph_data_list.append(cur_subgraphs)
 	# return
 
 	print('========after full batch subgraphs of data loading===================================================')
@@ -154,12 +156,12 @@ def run(args, device, data):
 	batch_nodes=[]
 
 	print(len(full_batch_sub_graph_data_list))
-	for epoch, full_batch_subgraph in enumerate(full_batch_sub_graph_data_list): # args.epochs
+	for epoch, full_batch_subgraph_list in enumerate(full_batch_sub_graph_data_list): # args.epochs
 		print('Epoch ' + str(epoch))		
 		# data loader sampling fan-out neighbor each new epoch
 		
 		tic = time.time()
-		block_dataloader, weights_list,time_collection = generate_dataloader(g, full_batch_subgraph, args)
+		block_dataloader, weights_list,time_collection = generate_dataloader(g, full_batch_subgraph_list, args)
 		toc = CPU_DELTA_TIME(tic, '\n----main run function: block dataloader generation total ')
 		print()
 				
@@ -397,44 +399,27 @@ if __name__=='__main__':
 	# argparser.add_argument('--dataset', type=str, default='ogbn-products')
 	# argparser.add_argument('--aggre', type=str, default='lstm')
 	# argparser.add_argument('--dataset', type=str, default='cora')
-<<<<<<< HEAD
 	argparser.add_argument('--dataset', type=str, default='karate')
 	# argparser.add_argument('--dataset', type=str, default='reddit')
 	argparser.add_argument('--aggre', type=str, default='mean')
 	argparser.add_argument('--selection-method', type=str, default='range')
 	# argparser.add_argument('--selection-method', type=str, default='random')
 	# argparser.add_argument('--selection-method', type=str, default='random_init_graph_partition')
-=======
-	# argparser.add_argument('--dataset', type=str, default='karate')
-	argparser.add_argument('--dataset', type=str, default='reddit')
-	argparser.add_argument('--aggre', type=str, default='mean')
-	# argparser.add_argument('--selection-method', type=str, default='range')
-	# argparser.add_argument('--selection-method', type=str, default='random')
-	argparser.add_argument('--selection-method', type=str, default='random_init_graph_partition')
->>>>>>> f648ab2beadee2b358619f4d35bdec2ac448d07a
 	# argparser.add_argument('--selection-method', type=str, default='balanced_init_graph_partition')
 	argparser.add_argument('--balanced_init_ratio', type=float, default=0.2)
 	argparser.add_argument('--num-runs', type=int, default=2)
 	argparser.add_argument('--num-epochs', type=int, default=6)
 	argparser.add_argument('--num-hidden', type=int, default=16)
-<<<<<<< HEAD
 	argparser.add_argument('--num-layers', type=int, default=2)
 	# argparser.add_argument('--fan-out', type=str, default='20')
 	argparser.add_argument('--fan-out', type=str, default='10,25')
-=======
-	argparser.add_argument('--num-layers', type=int, default=1)
-	# argparser.add_argument('--fan-out', type=str, default='20')
-	argparser.add_argument('--fan-out', type=str, default='10')
->>>>>>> f648ab2beadee2b358619f4d35bdec2ac448d07a
 #---------------------------------------------------------------------------------------
-	argparser.add_argument('--num_batch', type=int, default=8)
-	argparser.add_argument('--batch-size', type=int, default=0)
+	# argparser.add_argument('--num_batch', type=int, default=4)
+	# argparser.add_argument('--batch-size', type=int, default=6)
+	argparser.add_argument('--num_batch', type=int, default=4)
+	argparser.add_argument('--batch-size', type=int, default=6)
 #--------------------------------------------------------------------------------------
-<<<<<<< HEAD
 	# argparser.add_argument('--target-redun', type=float, default=1.9)
-=======
-	argparser.add_argument('--target-redun', type=float, default=1.9)
->>>>>>> f648ab2beadee2b358619f4d35bdec2ac448d07a
 	argparser.add_argument('--alpha', type=float, default=1)
 	# argparser.add_argument('--walkterm', type=int, default=0)
 	argparser.add_argument('--walkterm', type=int, default=1)
@@ -479,9 +464,9 @@ if __name__=='__main__':
 		help="Inductive learning setting") #The store_true option automatically creates a default value of False
 	argparser.add_argument('--data-cpu', action='store_true',
 		help="By default the script puts all node features and labels "
-		     "on GPU when using it to save time for data copy. This may "
-		     "be undesired if they cannot fit in GPU memory at once. "
-		     "This flag disables that.")
+			"on GPU when using it to save time for data copy. This may "
+			"be undesired if they cannot fit in GPU memory at once. "
+			"This flag disables that.")
 	args = argparser.parse_args()
 
 	set_seed(args)

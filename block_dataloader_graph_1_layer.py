@@ -7,7 +7,7 @@ from statistics import mean
 from multiprocessing import Manager, Pool
 from multiprocessing import Process, Value, Array
 from graph_partitioner import Graph_Partitioner
-from my_utils import gen_batch_output_list
+
 
 def unique_tensor_item(combined):
 	uniques, counts = combined.unique(return_counts=True)
@@ -41,6 +41,7 @@ def generate_random_mini_batch_seeds_list(OUTPUT_NID, args):
 
 	'''
 	selection_method = args.selection_method
+ 	
 	mini_batch = args.batch_size
 	full_len = len(OUTPUT_NID)  # get the total number of output nodes
 	if selection_method == 'random':
@@ -168,18 +169,16 @@ def check_connections_0(batch_nodes_list, full_batch_block_graph):
 	return res
 
 
-def generate_blocks_for_one_layer(raw_graph, block_2_graph, batches_nid_list):
-
-	blocks = []
+def generate_blocks(raw_graph, full_batch_block_2_graph, batches_nid_list):
+	data_loader = []
 	check_connection_time = []
 	block_generation_time = []
 
 	t1= time.time()
-	batches_temp_res_list = check_connections_0(batches_nid_list, block_2_graph)
+	batches_temp_res_list = check_connections_0(batches_nid_list, full_batch_block_2_graph)
 	t2 = time.time()
 	check_connection_time.append(t2-t1) #------------------------------------------
-	src_list=[]
-	dst_list=[]
+
 
 	for step, (srcnid, dstnid, current_block_global_eid) in enumerate(batches_temp_res_list):
 		# print('batch ' + str(step) + '-' * 30)
@@ -188,11 +187,7 @@ def generate_blocks_for_one_layer(raw_graph, block_2_graph, batches_nid_list):
 		t__=time.time()
 		block_generation_time.append(t__-t_)  #------------------------------------------
 		
-		blocks.append(cur_block)
-		src_list.append(srcnid)
-		dst_list.append(dstnid)
-
-		# data_loader.append((srcnid, dstnid, [cur_block]))
+		data_loader.append((srcnid, dstnid, [cur_block]))
 		
 	# print("\nconnection checking time " + str(sum(check_connection_time)))
 	# print("total of block generation time " + str(sum(block_generation_time)))
@@ -202,7 +197,7 @@ def generate_blocks_for_one_layer(raw_graph, block_2_graph, batches_nid_list):
 	mean_block_gen_time = mean(block_generation_time)
 
 
-	return blocks, src_list,dst_list,(connection_time, block_gen_time, mean_block_gen_time)
+	return data_loader, (connection_time, block_gen_time, mean_block_gen_time)
 
 
 def generate_dataloader_0(raw_graph, block_to_graph, args):
@@ -227,7 +222,12 @@ def generate_dataloader_0(raw_graph, block_to_graph, args):
 
 	return data_loader, weights_list, time_2
 
+
+
+
 #---------------------------------------------------------------------------------------------------------------------------------		
+	
+		
 def check_connections(batch_nodes_list, full_batch_block_graph):
 	res=[]
 	
@@ -273,7 +273,6 @@ def check_connections(batch_nodes_list, full_batch_block_graph):
 	
 	return res
 
-
 def generate_dataloader_partition(raw_graph, block_to_graph, args):
 	current_block_eidx, current_block_edges = get_global_graph_edges_ids_2(raw_graph, block_to_graph)
 	block_to_graph.edata['_ID'] = current_block_eidx
@@ -284,6 +283,7 @@ def generate_dataloader_partition(raw_graph, block_to_graph, args):
 	
 	# batched_output_nid_list,weights_list,batch_list_generation_time, p_len_list=random_init_graph_partition( block_to_graph, args)
 	# print('random_init_graph_partition spend ', time.time()-t1)
+
 
 	my_graph_partitioner=Graph_Partitioner(block_to_graph, args) #init a graph partitioner object
 	batched_output_nid_list,weights_list,batch_list_generation_time, p_len_list=my_graph_partitioner.random_init_graph_partition()
@@ -299,99 +299,36 @@ def generate_dataloader_partition(raw_graph, block_to_graph, args):
 
 	return data_loader, weights_list, time_2
 
-def gen_grouped_dst_list(prev_layer_blocks):
-	post_dst=[]
-	for block in prev_layer_blocks:
-		src_nids = block.srcdata['_ID'].tolist()
-		post_dst.append(src_nids)
-	return post_dst # return next layer's dst nids(equals prev layer src nids)
+# def generate_dataloader_partition(raw_graph, block_to_graph, args):
+# 	current_block_eidx, current_block_edges = get_global_graph_edges_ids_2(raw_graph, block_to_graph)
+# 	block_to_graph.edata['_ID'] = current_block_eidx
+	
+# 	# print('time of batches_nid_list generation : ' + str(t1 - tt) + ' sec')
+# 	t1=time.time()
+# 	from graph_partition import random_init_graph_partition
+# 	batched_output_nid_list,weights_list,batch_list_generation_time, p_len_list=random_init_graph_partition( block_to_graph, args)
+# 	print('random_init_graph_partition spend ', time.time()-t1)
+# 	print('partition_len_list')
+# 	print(p_len_list)
+	
+# 	data_loader, time_1 = generate_blocks(raw_graph, block_to_graph, batched_output_nid_list)
+# 	connection_time, block_gen_time, mean_block_gen_time = time_1
+# 	# batch_list_generation_time = t1 - tt
+# 	time_2 = (connection_time, block_gen_time, mean_block_gen_time, batch_list_generation_time)
 
-def generate_dataloader_wo_gp_Pure_range(raw_graph, block_to_graph_list, args):
-	data_loader=[]
-	weights_list=[]
-	num_batch=0
-	blocks_list=[]
-	final_dst_list =[]
-	final_src_list=[]
-	prev_layer_blocks=[]
-	t_2_list=[]
-	# prev_layer_src_list=[]
-	# prev_layer_dst_list=[]
-	for layer, block_to_graph in enumerate(block_to_graph_list):
-		if layer ==0:
-			current_block_eidx, current_block_edges = get_global_graph_edges_ids_2(raw_graph, block_to_graph)
-			block_to_graph.edata['_ID'] = current_block_eidx
-			dst_nids=block_to_graph.dstdata['_ID'].tolist()
-			# src_nids=block_to_graph.srcdata['_ID'].tolist()
-			# print('time of batches_nid_list generation : ' + str(t1 - tt) + ' sec')
-			t1=time.time()
-			indices = [i for i in range(len(dst_nids))]
-			batched_output_nid_list, w_list=gen_batch_output_list(dst_nids,indices,args.batch_size)
-			tt=time.time()
-			weights_list=w_list
-			num_batch=len(batched_output_nid_list)
-			print('layer ', layer)
-			print('\tselection method range initialization spend ', time.time()-t1)
-			# block 0 : (src_0, dst_0); block 1 : (src_1, dst_1);.......
-			blocks, src_list, dst_list,time_1 = generate_blocks_for_one_layer(raw_graph, block_to_graph, batched_output_nid_list)
-			connection_time, block_gen_time, mean_block_gen_time = time_1
-			batch_list_generation_time = tt - t1
-			time_2 = [connection_time, block_gen_time, mean_block_gen_time, batch_list_generation_time]
-			t_2_list.append(time_2)
-			prev_layer_blocks=blocks
-			# prev_layer_dst_list=dst_list
-			# prev_layer_src_list=src_list
-
-			blocks_list.append(blocks)
-			final_dst_list=dst_list
-
-		else:
-			current_block_eidx, current_block_edges = get_global_graph_edges_ids_2(raw_graph, block_to_graph)
-			block_to_graph.edata['_ID'] = current_block_eidx
-			output_nids=block_to_graph.dstdata['_ID']
-			# print('time of batches_nid_list generation : ' + str(t1 - tt) + ' sec')
-			t1=time.time()
-			
-			grouped_output_nid_list=gen_grouped_dst_list(prev_layer_blocks)
-			tt=time.time()
-			print('layer ',layer)
-			print('\tselection method range initialization spend ', time.time()-t1)
-			
-			blocks, src_list, dst_list, time_1 = generate_blocks_for_one_layer(raw_graph, block_to_graph, grouped_output_nid_list)
-			connection_time, block_gen_time, mean_block_gen_time = time_1
-			batch_list_generation_time = tt-t1
-			time_2 = [connection_time, block_gen_time, mean_block_gen_time, batch_list_generation_time]
-			t_2_list.append(time_2)
-
-			if layer<args.num_layers-1:
-				prev_layer_blocks=blocks
-				# prev_layer_dst_list=dst_list
-				# prev_layer_src_list=src_list
-			else:
-				final_src_list=src_list
-			blocks_list.append(blocks)
-
-	for bid in range(num_batch):
-		cur_blocks=[]
-		for i in range(args.num_layers-1,-1,-1):
-			cur_blocks.append(blocks_list[i][bid])
-		dst = final_dst_list[bid]
-		src = final_src_list[bid]
-		data_loader.append((src, dst, cur_blocks))
-
-	sum_list=[]
-	for i in range(0,len(t_2_list),2):
-		list1=t_2_list[i]
-		list2=t_2_list[i+1]
-		for (item1, item2) in zip(list1, list2):
-			sum_list.append(item1+item2)
-
-	return data_loader, weights_list, sum_list
+# 	return data_loader, weights_list, time_2
 		
-
-def generate_dataloader(raw_graph, block_to_graph_list, args):
+		
+		
+		
+		
+		
+		
+		
+		
+		
+def generate_dataloader(raw_graph, block_to_graph, args):
     if 'partition' in args.selection_method:
-        return generate_dataloader_partition(raw_graph, block_to_graph_list, args)
+        return generate_dataloader_partition(raw_graph, block_to_graph, args)
     else:
-        return generate_dataloader_wo_gp_Pure_range(raw_graph, block_to_graph_list, args)
-		# return generate_dataloader_0(raw_graph, block_to_graph, args)
+        return generate_dataloader_0(raw_graph, block_to_graph, args)

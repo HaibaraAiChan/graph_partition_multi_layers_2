@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 # from block_dataloader import generate_dataloader
-from block_dataloader_graph import generate_dataloader
+from graph_partition_multi_layers.block_dataloader_graph_1_layer import generate_dataloader
 import dgl.nn.pytorch as dglnn
 import time
 import argparse

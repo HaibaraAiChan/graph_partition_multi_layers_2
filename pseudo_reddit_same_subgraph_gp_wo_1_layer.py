@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import os
 # from block_dataloader import generate_dataloader
-from block_dataloader_graph import generate_dataloader
+from graph_partition_multi_layers.block_dataloader_graph_1_layer import generate_dataloader
 import dgl.nn.pytorch as dglnn
 import time
 import argparse
@@ -84,6 +84,14 @@ def load_block_subtensor(nfeat, labels, blocks, device):
 	batch_labels = labels[blocks[-1].dstdata[dgl.NID]].to(device)
 	return batch_inputs, batch_labels
 
+def get_mini_batch_size(full_len,num_batch):
+	mini_batch=int(full_len/num_batch)
+	if full_len%num_batch>0:
+		mini_batch+=1
+	# print('current mini batch size of output nodes ', mini_batch)
+	return mini_batch
+
+
 #### Entry point
 def run(args, device, data):
 	# Unpack data
@@ -94,6 +102,7 @@ def run(args, device, data):
 		[int(fanout) for fanout in args.fan_out.split(',')])
 
 	full_batch_size = len(train_nid)
+	args.batch_size = get_mini_batch_size(full_batch_size,args.num_batch)
 	full_batch_dataloader = dgl.dataloading.NodeDataLoader(
 		g,
 		train_nid,
@@ -120,7 +129,8 @@ def run(args, device, data):
 	for epoch in range(args.num_epochs):
 		print('Epoch ' + str(epoch))
 		from dgl.data.utils import load_graphs
-		full_batch_subgraph =list(load_graphs('./DATA/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
+		# full_batch_subgraph =list(load_graphs('./DATA/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
+		full_batch_subgraph =list(load_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
 		
 		cur_subgraph = full_batch_subgraph[0][0]
 		
@@ -353,13 +363,15 @@ if __name__=='__main__':
 	argparser.add_argument('--dataset', type=str, default='karate')
 	# argparser.add_argument('--dataset', type=str, default='reddit')
 	argparser.add_argument('--aggre', type=str, default='mean')
-	argparser.add_argument('--selection-method', type=str, default='random')
+	argparser.add_argument('--selection-method', type=str, default='range')
 	argparser.add_argument('--num-runs', type=int, default=2)
 	argparser.add_argument('--num-epochs', type=int, default=6)
 	argparser.add_argument('--num-hidden', type=int, default=16)
 	argparser.add_argument('--num-layers', type=int, default=1)
 	# argparser.add_argument('--fan-out', type=str, default='20')
 	argparser.add_argument('--fan-out', type=str, default='10')
+	argparser.add_argument('--num-batch', type=int, default=4)
+	argparser.add_argument('--batch-size', type=int, default=6)
 
 
 	# argparser.add_argument('--batch-size', type=int, default=157393)
@@ -381,7 +393,7 @@ if __name__=='__main__':
 	# argparser.add_argument('--batch-size', type=int, default=6145)
 	# argparser.add_argument('--batch-size', type=int, default=3000)
 	# argparser.add_argument('--batch-size', type=int, default=1500)
-	argparser.add_argument('--batch-size', type=int, default=3)
+	
 
 	argparser.add_argument("--eval-batch-size", type=int, default=100000,
                         help="evaluation batch size")

@@ -22,7 +22,6 @@ import tracemalloc
 from cpu_mem_usage import get_memory
 import pickle
 # from utils import draw_graph_global
-from dgl.data.utils import save_graphs
 
 
 def set_seed(args):
@@ -75,24 +74,24 @@ def run(args, device, data):
 			for full_batch_step, (input_nodes, output_seeds, full_batch_blocks) in enumerate(full_batch_dataloader):
 				# print('full_batch_blocks')
 				print(full_batch_blocks)
-				l=len(full_batch_blocks)
 				avg_src.append(len(input_nodes))
 				# print(len(full_batch_blocks[0].srcdata['_ID']))
 				# print(len(full_batch_blocks[0].dstdata['_ID']))
-				for layer, cur_block in enumerate(full_batch_blocks):
+				for cur_block in full_batch_blocks:
 					block_to_graph=dgl.block_to_graph(cur_block)
-					save_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_Block_'+str(l-1-layer)+'_subgraph.bin',[block_to_graph])
+					from dgl.data.utils import save_graphs
+					save_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[block_to_graph])
 		print('mean src ', numpy.mean(avg_src))
-		if args.dataset=='karate' and abs((numpy.mean(avg_src) - 34)) < 2:     ### 
+		if args.dataset=='karate' and abs((numpy.mean(avg_src) - 31)) < 2:     ### 
 			return
-		# if args.dataset=='cora' and abs((numpy.mean(avg_src) - 588)) < int(args.fan_out):     ### 
-		# 	return
-		# if args.dataset=='reddit' and args.fan_out =='10' and abs((numpy.mean(avg_src) - 217248)) < 10:   ### reddit dataset
-		# 	return
-		# if args.dataset=='reddit' and args.fan_out =='100' and abs((numpy.mean(avg_src) - 226365)) < int(args.fan_out):   ### reddit dataset
-		# 	return
-		# if args.dataset=='ogbn-mag' or 'ogbn-products':
-		# 	return
+		if args.dataset=='cora' and abs((numpy.mean(avg_src) - 588)) < int(args.fan_out):     ### 
+			return
+		if args.dataset=='reddit' and args.fan_out =='10' and abs((numpy.mean(avg_src) - 217248)) < 10:   ### reddit dataset
+			return
+		if args.dataset=='reddit' and args.fan_out =='100' and abs((numpy.mean(avg_src) - 226365)) < int(args.fan_out):   ### reddit dataset
+			return
+		if args.dataset=='ogbn-mag' or 'ogbn-products':
+			return
 		
 			
 
@@ -158,9 +157,9 @@ if __name__=='__main__':
 	argparser.add_argument('--num-runs', type=int, default=2)
 	argparser.add_argument('--num-epochs', type=int, default=6)
 	argparser.add_argument('--num-hidden', type=int, default=16)
-	argparser.add_argument('--num-layers', type=int, default=2)
+	argparser.add_argument('--num-layers', type=int, default=1)
 	# argparser.add_argument('--fan-out', type=str, default='20')
-	argparser.add_argument('--fan-out', type=str, default='10,25')
+	argparser.add_argument('--fan-out', type=str, default='10')
 
 
 	argparser.add_argument('--batch-size', type=int, default=157393)
