@@ -40,7 +40,7 @@ def generate_random_mini_batch_seeds_list(OUTPUT_NID, args):
 
 	'''
 	selection_method = args.selection_method
- 	
+
 	mini_batch = args.batch_size
 	full_len = len(OUTPUT_NID)  # get the total number of output nodes
 	if selection_method == 'random':

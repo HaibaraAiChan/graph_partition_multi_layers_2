@@ -414,11 +414,7 @@ class Graph_Partitioner:
         move_flag = balance_flag and red_flag
 
         return move_flag, red_rate
- 
 
-
-
-   
     def get_Red_Rate(self): 
 
         A_o,B_o=get_two_partition_seeds(self.bit_dict)
@@ -592,7 +588,7 @@ class Graph_Partitioner:
         global block_to_graph
         block_to_graph=local_g
 
-        self.gen_batched_seeds_list()
+        self.gen_batched_seeds_list() # based on user choice to split output nodes 
 
         src_len_list= self.get_partition_src_len_list()
 
@@ -682,7 +678,7 @@ class Graph_Partitioner:
         #     print('the time spend on '+str(function_name)+' is '+str(tt))
 
 
-    def random_init_graph_partition(self):
+    def init_graph_partition(self):
         ts = time.time()
         
         self.global_to_local() # global to local            self.local_batched_seeds_list

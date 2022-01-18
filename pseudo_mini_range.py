@@ -24,6 +24,8 @@ from memory_usage import see_memory_usage, nvidia_smi_usage
 import tracemalloc
 from cpu_mem_usage import get_memory
 from statistics import mean
+from draw_graph import generate_interactive_graph,gen_pyvis_graph
+from my_utils import block_graph_to_homo
 # from utils import draw_graph_global
 
 
@@ -84,6 +86,14 @@ def load_block_subtensor(nfeat, labels, blocks, device):
 	batch_labels = labels[blocks[-1].dstdata[dgl.NID]].to(device)
 	return batch_inputs, batch_labels
 
+
+def get_total_src_length(blocks):
+    res=0
+    for block in blocks:
+        src_len=len(block.srcdata['_ID'])
+        res+=src_len
+    return res
+
 #### Entry point
 def run(args, device, data):
 	# Unpack data
@@ -122,14 +132,23 @@ def run(args, device, data):
 	for epoch in range(args.num_epochs):
 		print('Epoch ' + str(epoch))
 		from dgl.data.utils import load_graphs
-		full_batch_subgraph =list(load_graphs('/home/cc/CODE_BAK/graph_partition/DATA/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
-		
-		cur_subgraph = full_batch_subgraph[0][0]
-		print('cur_subgraph.ndata')
-		print(cur_subgraph.ndata)
-		# print(cur_subgraph.srcdata)
-		print()
-		full_batch_sub_graph_data_list.append(cur_subgraph)
+		cur_subgraphs=[]
+		for i in range(args.num_layers):
+			_subgraph =list(load_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_Block_'+str(i)+'_subgraph.bin',[0]))
+			cur_subgraph=_subgraph[0][0]
+			cur_subgraphs.append(_subgraph[0][0])
+			print('cur_subgraph.ndata')
+			print(len(cur_subgraph.srcdata['_ID']))
+			print(len(cur_subgraph.dstdata['_ID']))
+			# print(cur_subgraph.srcdata)
+			print()
+			print(cur_subgraph)
+			cur_subgraph=block_graph_to_homo(cur_subgraph)
+			print(cur_subgraph)
+			# gen_pyvis_graph(cur_subgraph,epoch)
+			# generate_interactive_graph(cur_subgraph,epoch)
+			print('$-'*50)
+		full_batch_sub_graph_data_list.append(cur_subgraphs)
 	# return
 
 	print('========after full batch subgraphs of data loading===================================================')
@@ -154,12 +173,12 @@ def run(args, device, data):
 	batch_nodes=[]
 
 	print(len(full_batch_sub_graph_data_list))
-	for epoch, full_batch_subgraph in enumerate(full_batch_sub_graph_data_list): # args.epochs
+	for epoch, full_batch_subgraph_list in enumerate(full_batch_sub_graph_data_list): # args.epochs
 		print('Epoch ' + str(epoch))		
 		# data loader sampling fan-out neighbor each new epoch
 		
 		tic = time.time()
-		block_dataloader, weights_list,time_collection = generate_dataloader(g, full_batch_subgraph, args)
+		block_dataloader, weights_list,time_collection = generate_dataloader(g, full_batch_subgraph_list, args)
 		toc = CPU_DELTA_TIME(tic, '\n----main run function: block dataloader generation total ')
 		print()
 				
@@ -196,16 +215,16 @@ def run(args, device, data):
 			# Load the input features as well as output labels
 			batch_inputs, batch_labels = load_block_subtensor(feats, labels, blocks, device)
 			blocks = [block.int().to(device) for block in blocks]
-			
+			args.num_batch=(len(batch_inputs))
 
 			end.record()
 			torch.cuda.synchronize()  # wait for move to complete
 			step_data_trans_time_list.append(start.elapsed_time(end))
 			nvidia_smi_list.append(nvidia_smi_usage()) # GPU
 			
-			batch_node_collection.append(len(input_nodes))
+			batch_node_collection.append(len(input_nodes.tolist()))
 
-			nodes_collection.append(len(input_nodes.tolist()))
+			nodes_collection.append(get_total_src_length(blocks))
 			#----------------------------------------------------------------------------------------
 			
 			start1 = torch.cuda.Event(enable_timing=True)
@@ -327,8 +346,13 @@ def run(args, device, data):
 	print()
 	print('='*100)
 	avg_epoch_nodes = sum(nodes_collection) / args.num_epochs
-	print('\t avg src nodes number per epoch \t:%.1f ' % (avg_epoch_nodes))
-	print('\t ave src batch nodes \t\t:%.1f ' % (mean(batch_nodes)))
+	print('\t avg src nodes number per epoch (sum(src_among all blocks))\t:%.2f ' % (avg_epoch_nodes))
+	print('\t avg computation nodes size (sum(src_among all blocks)) \t:%.2f ' % (avg_epoch_nodes/args.num_batch))
+	print('\t avg src partition nodes (memory consumprion ) \t\t:%.2f ' % (mean(batch_nodes)))
+	print('\t the number of batch ', args.num_batch )
+
+
+	# print('\t ideal src part nodes \t\t:%.2f ' % (mean(batch_nodes)))
 	
 	
 	print()
@@ -338,8 +362,8 @@ def run(args, device, data):
 	test_acc = evaluate(model, g, feats, labels, test_nid, device)
 	print('Test Acc: {:.6f}'.format(test_acc))
 	
-	print('average batch nodes')
-	print(mean(batch_nodes))
+	# print('average batch nodes')
+	# print(mean(batch_nodes))
 	
 
 
@@ -400,25 +424,33 @@ if __name__=='__main__':
 	argparser.add_argument('--dataset', type=str, default='karate')
 	# argparser.add_argument('--dataset', type=str, default='reddit')
 	argparser.add_argument('--aggre', type=str, default='mean')
-	# argparser.add_argument('--selection-method', type=str, default='range')
-	argparser.add_argument('--selection-method', type=str, default='random')
+	argparser.add_argument('--selection-method', type=str, default='range')
+	# argparser.add_argument('--selection-method', type=str, default='random')
 	# argparser.add_argument('--selection-method', type=str, default='random_init_graph_partition')
+	# argparser.add_argument('--selection-method', type=str, default='balanced_init_graph_partition')
+	argparser.add_argument('--balanced_init_ratio', type=float, default=0.2)
 	argparser.add_argument('--num-runs', type=int, default=2)
 	argparser.add_argument('--num-epochs', type=int, default=6)
 	argparser.add_argument('--num-hidden', type=int, default=16)
-	argparser.add_argument('--num-layers', type=int, default=1)
+	argparser.add_argument('--num-layers', type=int, default=2)
 	# argparser.add_argument('--fan-out', type=str, default='20')
-	argparser.add_argument('--fan-out', type=str, default='10')
+	# argparser.add_argument('--fan-out', type=str, default='10,25')
+	argparser.add_argument('--fan-out', type=str, default='2,2')
 #---------------------------------------------------------------------------------------
-	argparser.add_argument('--num-batch', type=int, default=8)
+	# argparser.add_argument('--num_batch', type=int, default=4)
+	# argparser.add_argument('--batch-size', type=int, default=6)
+	argparser.add_argument('--num_batch', type=int, default=0)
+	argparser.add_argument('--batch-size', type=int, default=8)
 #--------------------------------------------------------------------------------------
-	argparser.add_argument('--target-redun', type=float, default=1.9)
-	argparser.add_argument('--alpha', type=float, default=0.2)
-	argparser.add_argument('--walkterm', type=int, default=0)
+	# argparser.add_argument('--target-redun', type=float, default=1.9)
+	argparser.add_argument('--alpha', type=float, default=1)
+	# argparser.add_argument('--walkterm', type=int, default=0)
+	argparser.add_argument('--walkterm', type=int, default=1)
+	argparser.add_argument('--redundancy_tolarent_steps', type=int, default=2)
 	
 	# argparser.add_argument('--batch-size', type=int, default=3)
 
-	argparser.add_argument('--batch-size', type=int, default=157393)
+	# argparser.add_argument('--batch-size', type=int, default=157393)
 	# argparser.add_argument('--batch-size', type=int, default=78697)
 	# argparser.add_argument('--batch-size', type=int, default=39349)
 	# argparser.add_argument('--batch-size', type=int, default=19675)
@@ -455,9 +487,9 @@ if __name__=='__main__':
 		help="Inductive learning setting") #The store_true option automatically creates a default value of False
 	argparser.add_argument('--data-cpu', action='store_true',
 		help="By default the script puts all node features and labels "
-		     "on GPU when using it to save time for data copy. This may "
-		     "be undesired if they cannot fit in GPU memory at once. "
-		     "This flag disables that.")
+			"on GPU when using it to save time for data copy. This may "
+			"be undesired if they cannot fit in GPU memory at once. "
+			"This flag disables that.")
 	args = argparser.parse_args()
 
 	set_seed(args)

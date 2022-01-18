@@ -1,8 +1,12 @@
 import os
 import time
 import numpy
+import dgl
 
-
+def block_graph_to_homo(G):
+    u,v=G.edges()
+    g=dgl.graph((u,v))
+    return g
 
 def gen_batch_output_list(OUTPUT_NID,indices,mini_batch):
 

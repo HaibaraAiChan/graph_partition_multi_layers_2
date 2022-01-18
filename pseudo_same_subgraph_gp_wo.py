@@ -18,13 +18,13 @@ import random
 from graphsage_model import SAGE
 import dgl.function as fn
 from load_graph import load_reddit, inductive_split, load_ogb, load_cora, load_karate, prepare_data
-from load_graph import load_ogbn_mag    ###### TODO
-
-from memory_usage import see_memory_usage, nvidia_smi_usage
+from load_graph import load_ogbn_mag
+from memory_usage import see_memory_usage
 import tracemalloc
 from cpu_mem_usage import get_memory
 from statistics import mean
 # from utils import draw_graph_global
+from dgl.data.utils import load_graphs
 
 
 def set_seed(args):
@@ -50,7 +50,7 @@ def compute_acc(pred, labels):
 	Compute the accuracy of prediction given the labels.
 	"""
 	labels = labels.long()
-	return (torch.argmax(pred, dim=1) == labels).float().sum() / len(pred)
+	return (torch.argmax(pred, dim=1)==labels).float().sum() / len(pred)
 
 
 def evaluate(model, g, nfeat, labels, val_nid, device):
@@ -80,30 +80,44 @@ def load_block_subtensor(nfeat, labels, blocks, device):
 	"""
 	Extracts features and labels for a subset of nodes
 	"""
+	
 	batch_inputs = nfeat[blocks[0].srcdata[dgl.NID]].to(device)
 	batch_labels = labels[blocks[-1].dstdata[dgl.NID]].to(device)
 	return batch_inputs, batch_labels
+
+def get_mini_batch_size(full_len,num_batch):
+	mini_batch=int(full_len/num_batch)
+	if full_len%num_batch>0:
+		mini_batch+=1
+	# print('current mini batch size of output nodes ', mini_batch)
+	return mini_batch
+
+def get_total_src_length(blocks):
+    res=0
+    for block in blocks:
+        src_len=len(block.srcdata['_ID'])
+        res+=src_len
+    return res
 
 #### Entry point
 def run(args, device, data):
 	# Unpack data
 	g, feats, labels, n_classes, train_nid, val_nid, test_nid = data
 	in_feats = len(feats[0])
-	nvidia_smi_list=[]
-	
 
-	# sampler = dgl.dataloading.MultiLayerNeighborSampler(
-	# 	[int(fanout) for fanout in args.fan_out.split(',')])
+	sampler = dgl.dataloading.MultiLayerNeighborSampler(
+		[int(fanout) for fanout in args.fan_out.split(',')])
 
-	# full_batch_size = len(train_nid)
-	# full_batch_dataloader = dgl.dataloading.NodeDataLoader(
-	# 	g,
-	# 	train_nid,
-	# 	sampler,
-	# 	batch_size=full_batch_size,
-	# 	shuffle=True,
-	# 	drop_last=False,
-	# 	num_workers=args.num_workers)
+	full_batch_size = len(train_nid)
+	args.batch_size = get_mini_batch_size(full_batch_size,args.num_batch)
+	full_batch_dataloader = dgl.dataloading.NodeDataLoader(
+		g,
+		train_nid,
+		sampler,
+		batch_size=full_batch_size,
+		shuffle=True,
+		drop_last=False,
+		num_workers=args.num_workers)
 	
 	model = SAGE(in_feats, args.num_hidden, n_classes, args.num_layers, F.relu, args.dropout, args.aggre)
 	model = model.to(device)
@@ -121,29 +135,25 @@ def run(args, device, data):
 	full_batch_sub_graph_data_list=[]
 	for epoch in range(args.num_epochs):
 		print('Epoch ' + str(epoch))
-		from dgl.data.utils import load_graphs
-		full_batch_subgraph =list(load_graphs('/home/cc/CODE_BAK/graph_partition/DATA/'+args.dataset+'_'+str(epoch)+'_subgraph.bin',[0]))
 		
-		cur_subgraph = full_batch_subgraph[0][0]
-		print('cur_subgraph.ndata')
-		print(cur_subgraph.ndata)
-		# print(cur_subgraph.srcdata)
-		print()
-		full_batch_sub_graph_data_list.append(cur_subgraph)
-	# return
+		cur_subgraphs=[]
+		for i in range(args.num_layers):
+			_subgraph =list(load_graphs('./DATA/fan_out_'+args.fan_out+'/'+args.dataset+'_'+str(epoch)+'_Block_'+str(i)+'_subgraph.bin',[0]))
+			cur_subgraph=_subgraph[0][0]
+			cur_subgraphs.append(_subgraph[0][0])
+			print('cur_subgraph.ndata')
+			print(len(cur_subgraph.srcdata[dgl.NID]))
+			# print(cur_subgraph.srcdata)
+			print()
+		full_batch_sub_graph_data_list.append(cur_subgraphs)
 
 	print('========after full batch subgraphs of data loading===================================================')
 	
 	train_accs = []
 	test_accs = []
-	
-	epoch_data_trans_time_list = []
-	epoch_GPU_train_time_list = []
-	epoch_time_list=[]
-	
-	avg_step_time_list = []
-	avg_step_data_trans_time_list = []
-	avg_step_GPU_train_time_list = []
+	t_step_data_trans_time_list = []
+	t_step_GPU_train_time_list = []
+	t_step_time_list = []
 
 	total_generate_time_list = []
 	connection_checking_time_list=[]
@@ -151,9 +161,10 @@ def run(args, device, data):
 	mean_per_block_generation_time_list=[]
 	batch_list_generate_time_list=[]
 	nodes_collection =[]
-	batch_nodes=[]
+	len_of_partition=[]
 
 	print(len(full_batch_sub_graph_data_list))
+	in_collection_t=[]
 	for epoch, full_batch_subgraph in enumerate(full_batch_sub_graph_data_list): # args.epochs
 		print('Epoch ' + str(epoch))		
 		# data loader sampling fan-out neighbor each new epoch
@@ -181,33 +192,33 @@ def run(args, device, data):
 		start = torch.cuda.Event(enable_timing=True)
 		end = torch.cuda.Event(enable_timing=True)
 		
+		# print('length of block dataloader')
+		# print(len(block_dataloader))
+
 		pseudo_mini_loss = torch.tensor([], dtype=torch.long)
 		loss_sum = 0
 		train_start_tic = time.time()
 		tic_step = time.time()
 
-		nvidia_smi_list.append(nvidia_smi_usage()) # GPU
-		batch_node_collection=[]
+		
+
+		in_collection=[]
 		for step, (input_nodes, seeds, blocks) in enumerate(block_dataloader):
 			# print("\n   ***************************     step   " + str(step) + " mini batch block  *************************************")
-			
+			# in_collection.append(len(input_nodes))
+			in_collection.append(get_total_src_length(blocks))
 			torch.cuda.synchronize()
 			start.record()
 			# Load the input features as well as output labels
 			batch_inputs, batch_labels = load_block_subtensor(feats, labels, blocks, device)
 			blocks = [block.int().to(device) for block in blocks]
-			
 
 			end.record()
 			torch.cuda.synchronize()  # wait for move to complete
 			step_data_trans_time_list.append(start.elapsed_time(end))
-			nvidia_smi_list.append(nvidia_smi_usage()) # GPU
-			
-			batch_node_collection.append(len(input_nodes))
 
-			nodes_collection.append(len(input_nodes.tolist()))
+			nodes_collection.append(get_total_src_length(blocks))
 			#----------------------------------------------------------------------------------------
-			
 			start1 = torch.cuda.Event(enable_timing=True)
 			end1 = torch.cuda.Event(enable_timing=True)
 			start1.record()
@@ -222,12 +233,10 @@ def run(args, device, data):
 			# print('----------------------------------------------------------pseudo_mini_loss ', pseudo_mini_loss)
 			pseudo_mini_loss.backward()
 			loss_sum += pseudo_mini_loss
-			nvidia_smi_list.append(nvidia_smi_usage()) # GPU
 
 			end1.record()
 			torch.cuda.synchronize()  # wait for all training steps to complete
 			step_GPU_train_time_list.append(start1.elapsed_time(end1))
-			
 
 			step_time = time.time() - tic_step
 			step_time_list.append(step_time)
@@ -239,107 +248,71 @@ def run(args, device, data):
 			tic_step = time.time()
 
 		# see_memory_usage("-----------------------------------------before final loss ")
-
+		in_collection_t.append(in_collection)
+		len_of_partition.append(mean(in_collection))
 		optimizer.step()
 		optimizer.zero_grad()
-		nvidia_smi_list.append(nvidia_smi_usage()) # GPU
 
 		train_end_toc = time.time()
 
 		epoch_train_CPU_time_list.append((train_end_toc - train_start_tic ))
 		print('current Epoch training on CPU with block data loading Time(s): {:.4f}'.format(train_end_toc - train_start_tic ))
 		# see_memory_usage("-----------------------------------------after optimizer.step() ")
-		batch_nodes.append(mean(batch_node_collection))
+
 		print('----------------------------------------------------------pseudo_mini_loss sum ' + str(loss_sum.tolist()))
-		
-		if epoch % args.log_every==0:
-			acc = compute_acc(batch_pred, batch_labels)
-			gpu_mem_alloc = torch.cuda.max_memory_allocated() / 1024 / 1024 /1024 if torch.cuda.is_available() else 0
-			print(
-				'Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.4f} GB'.format(
-					epoch, step, pseudo_mini_loss.item(), acc.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
-		
+		# if epoch % args.log_every==0:
+		# 	acc = compute_acc(batch_pred, batch_labels)
+		# 	gpu_mem_alloc = torch.cuda.max_memory_allocated() / 1024 / 1024 /1024 if torch.cuda.is_available() else 0
+		# 	print(
+		# 		'Epoch {:05d} | Step {:05d} | Loss {:.4f} | Train Acc {:.4f} | Speed (samples/sec) {:.4f} | GPU {:.4f} GB'.format(
+		# 			epoch, step, pseudo_mini_loss.item(), acc.item(), np.mean(iter_tput[3:]), gpu_mem_alloc))
 		
 		transer_time = sum(step_data_trans_time_list)
-		print('\t\t current epoch data from CPU -> GPU time\t:%.8f s' % (transer_time/1000))
-		epoch_data_trans_time_list.append(transer_time)
+		print('\t\tdata from CPU to GPU time:%.8f s' % (transer_time/1000))
+		t_step_data_trans_time_list.append(transer_time)
 	
 		gpu_time = sum(step_GPU_train_time_list)
-		print('\t\t current epoch GPU training time\t:%.8f s' % (gpu_time/1000))
-		epoch_GPU_train_time_list.append(gpu_time)
+		print('\t\tavg iteration GPU training time:%.8f s' % (gpu_time/1000))
+		t_step_GPU_train_time_list.append(gpu_time)
 	
 		epoch_CPU_time = sum(step_time_list)
-		print('\t\t current epoch total CPU time without optimizer step\t:%.8f s' % (epoch_CPU_time ))
-		epoch_time_list.append(epoch_CPU_time)
-		#----------------------------------------------------------------------------------------------------
-		step_transer_time = mean(step_data_trans_time_list)
-		print('\t\t avg batch tranfer data from CPU -> GPU time\t:%.8f s' % (step_transer_time/1000))
-		avg_step_data_trans_time_list.append(step_transer_time)
-	
-		step_gpu_time = mean(step_GPU_train_time_list)
-		print('\t\t avg batch GPU training time\t:%.8f s' % (step_gpu_time/1000))
-		avg_step_GPU_train_time_list.append(step_gpu_time)
+		print('\t\tcurrent epoch total CPU time without optimizer step:%.8f s' % (epoch_CPU_time ))
+		t_step_time_list.append(epoch_CPU_time)
 		
-		step_CPU_time = mean(step_time_list)
-		print('\t\t avg batch  CPU time without optimizer step\t:%.8f s' % (step_CPU_time ))
-		avg_step_time_list.append(step_CPU_time)
+	print('++++'*40)
+	print('input nodes length of ', in_collection_t)
+
+	print('input nodes avg partition length of ', mean(len_of_partition))
+	
 		
-	
-	print('-'*100)
-	print("\n avg time for block data loader generation " + str(mean(total_generate_time_list)))
-	print("\n batch NID list generation time  " + str(mean(batch_list_generate_time_list)))
-	print("\n connection checking time " + str(mean(connection_checking_time_list)))
-	print(" total of block generation time " + str(mean(blocks_generation_time_list)))
-	print(" average of block generation time " + str(mean(mean_per_block_generation_time_list)))
-	
-	print('='*100)
-	
-	print('CPU memory usage ') 
-	print(get_memory('')) # CPU
-	print('\n max nvidia-smi memory usage, '+ str(max(nvidia_smi_list))+' GB' )
-	see_memory_usage('') # GPU
-	
-	print()
-	print('-*'*50)
 	out_indent = 2 # skip the first 2 epochs, initial epoch time is not stable.
+	avg_epoch_total_cpu_train_time = sum(epoch_train_CPU_time_list[out_indent:]) / len(epoch_train_CPU_time_list[out_indent:])
+	print('\n------------------total avg epoch training  total cpu time:%.8f s' % (avg_epoch_total_cpu_train_time ))
 	
-	total_avg_epoch_time = sum(epoch_time_list[out_indent:]) / len(epoch_time_list[out_indent:])
-	print('\ttotal avg epoch total cpu time:%.8f s' % (total_avg_epoch_time ))
-	
-	# avg_epoch_total_cpu_train_time = sum(epoch_train_CPU_time_list[out_indent:]) / len(epoch_train_CPU_time_list[out_indent:])
-	# print('\n\t avg epoch training total cpu time\t:%.8f s' % (avg_epoch_total_cpu_train_time ))
-	
-	total_avg_epoch_data_trans_time = sum(epoch_data_trans_time_list[out_indent:]) / len(epoch_data_trans_time_list[out_indent:])
-	print('\t avg epoch data from cpu -> GPU time\t:%.8f s' % (total_avg_epoch_data_trans_time/1000))
-	total_avg_epoch_gpu_time = sum(epoch_GPU_train_time_list[out_indent:]) / len(epoch_GPU_train_time_list[out_indent:])
-	print('\t avg epoch GPU training time \t\t:%.8f s' % (total_avg_epoch_gpu_time/1000))
-	print()
-	#-----------------------------------------------------------------------------------------
-	print('='*100)
-	avg_batch_cpu_time = sum(avg_step_time_list[out_indent:]) / len(avg_step_time_list[out_indent:])
-	print('\n\t avg batch training total cpu time\t:%.8f s' % (avg_batch_cpu_time ))
-	
-	avg_batch_data_trans_time = sum(avg_step_data_trans_time_list[out_indent:]) / len(avg_step_data_trans_time_list[out_indent:])
-	print('\t avg batch data from cpu -> GPU time\t:%.8f s' % (avg_batch_data_trans_time/1000))
-	avg_batch_gpu_time = sum(avg_step_GPU_train_time_list[out_indent:]) / len(avg_step_GPU_train_time_list[out_indent:])
-	print('\t avg batch GPU training time \t\t:%.8f s' % (avg_batch_gpu_time/1000))
-	#-----------------------------------------------------------------------------------------
-	print()
-	print('='*100)
+	total_avg_iteration_time = sum(t_step_data_trans_time_list[out_indent:]) / len(t_step_data_trans_time_list[out_indent:])
+	print('\ttotal avg iteration(step) data from cpu to GPU time:%.8f s' % (total_avg_iteration_time/1000))
+	total_avg_iteration_gpu_time = sum(t_step_GPU_train_time_list[out_indent:]) / len(t_step_GPU_train_time_list[out_indent:])
+	print('\ttotal avg iteration GPU training time:%.8f s' % (total_avg_iteration_gpu_time/1000))
+	total_avg_step_time = sum(t_step_time_list[out_indent:]) / len(t_step_time_list[out_indent:])
+	print('\ttotal avg iteration (step) total cpu time:%.8f s' % (total_avg_step_time ))
+
+
 	avg_epoch_nodes = sum(nodes_collection) / args.num_epochs
-	print('\t avg src nodes number per epoch \t:%.1f ' % (avg_epoch_nodes))
-	print('\t ave src batch nodes \t\t:%.1f ' % (mean(batch_nodes)))
+	print()
+	print('\tavg epoch nodes src :%.1f ' % (avg_epoch_nodes ))
 	
-	
+
+	print("\navg time for block data loader generation " + str(mean(total_generate_time_list)))
+	print("\nbatch NID list generation time  " + str(mean(batch_list_generate_time_list)))
+	print("\nconnection checking time " + str(mean(connection_checking_time_list)))
+	print("total of block generation time " + str(mean(blocks_generation_time_list)))
+	print("average of block generation time " + str(mean(mean_per_block_generation_time_list)))
 	print()
 	print('='*100)
 	train_acc = evaluate(model, g, feats, labels, train_nid, device)
 	print('train Acc: {:.6f}'.format(train_acc))
 	test_acc = evaluate(model, g, feats, labels, test_nid, device)
 	print('Test Acc: {:.6f}'.format(test_acc))
-	
-	print('average batch nodes')
-	print(mean(batch_nodes))
 	
 
 
@@ -396,29 +369,23 @@ if __name__=='__main__':
 	# argparser.add_argument('--dataset', type=str, default='ogbn-mag')
 	# argparser.add_argument('--dataset', type=str, default='ogbn-products')
 	# argparser.add_argument('--aggre', type=str, default='lstm')
-	# argparser.add_argument('--dataset', type=str, default='cora')
-	argparser.add_argument('--dataset', type=str, default='karate')
+	argparser.add_argument('--dataset', type=str, default='cora')
+	# argparser.add_argument('--dataset', type=str, default='karate')
 	# argparser.add_argument('--dataset', type=str, default='reddit')
 	argparser.add_argument('--aggre', type=str, default='mean')
-	# argparser.add_argument('--selection-method', type=str, default='range')
-	argparser.add_argument('--selection-method', type=str, default='random')
-	# argparser.add_argument('--selection-method', type=str, default='random_init_graph_partition')
+	argparser.add_argument('--selection-method', type=str, default='range')
 	argparser.add_argument('--num-runs', type=int, default=2)
 	argparser.add_argument('--num-epochs', type=int, default=6)
 	argparser.add_argument('--num-hidden', type=int, default=16)
-	argparser.add_argument('--num-layers', type=int, default=1)
+	argparser.add_argument('--num-layers', type=int, default=2)
 	# argparser.add_argument('--fan-out', type=str, default='20')
-	argparser.add_argument('--fan-out', type=str, default='10')
-#---------------------------------------------------------------------------------------
-	argparser.add_argument('--num-batch', type=int, default=8)
-#--------------------------------------------------------------------------------------
-	argparser.add_argument('--target-redun', type=float, default=1.9)
-	argparser.add_argument('--alpha', type=float, default=0.2)
-	argparser.add_argument('--walkterm', type=int, default=0)
-	
-	# argparser.add_argument('--batch-size', type=int, default=3)
+	# argparser.add_argument('--fan-out', type=str, default='10,25')
+	argparser.add_argument('--fan-out', type=str, default='2,2')
+	argparser.add_argument('--num-batch', type=int, default=1)
+	argparser.add_argument('--batch-size', type=int, default=24)
 
-	argparser.add_argument('--batch-size', type=int, default=157393)
+
+	# argparser.add_argument('--batch-size', type=int, default=157393)
 	# argparser.add_argument('--batch-size', type=int, default=78697)
 	# argparser.add_argument('--batch-size', type=int, default=39349)
 	# argparser.add_argument('--batch-size', type=int, default=19675)
@@ -437,7 +404,7 @@ if __name__=='__main__':
 	# argparser.add_argument('--batch-size', type=int, default=6145)
 	# argparser.add_argument('--batch-size', type=int, default=3000)
 	# argparser.add_argument('--batch-size', type=int, default=1500)
-	# argparser.add_argument('--batch-size', type=int, default=8)
+	
 
 	argparser.add_argument("--eval-batch-size", type=int, default=100000,
                         help="evaluation batch size")
@@ -463,4 +430,3 @@ if __name__=='__main__':
 	set_seed(args)
 	
 	main(args)
-
